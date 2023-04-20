@@ -13,47 +13,65 @@ import (
 	"syscall"
 )
 
+// UnixSocketConfig has the configuration for Unix socket
 type UnixSocketConfig struct {
-	SocketPath     string
-	SocketMode     fs.FileMode
+
+	// Absolute or relative path of socket, e.g. /run/app.sock
+	SocketPath string
+
+	// Socket file permission
+	SocketMode fs.FileMode
+
+	// Whether to delete existing socket before creating new one
 	RemoveExisting bool
 }
 
+// DefaultUnixSocketConfig has defaults for UnixSocketConfig
 var DefaultUnixSocketConfig = UnixSocketConfig{
 	SocketMode:     0666,
 	RemoveExisting: true,
 }
 
+// NewUnixSocketConfig creates a UnixSocketConfig with the default values and the socketPath passed
 func NewUnixSocketConfig(socketPath string) UnixSocketConfig {
 	usc := DefaultUnixSocketConfig
 	usc.SocketPath = socketPath
 	return usc
 }
 
+// SysdConfig has the configuration for the socket activated fd
 type SysdConfig struct {
-	FDIndex  *int
-	FDName   *string
+	// Integer value starting at 0. Either index or name is required
+	FDIndex *int
+	// Name configured via FileDescriptorName or the default socket file name. Either index or name is required
+	FDName *string
+	// Check process PID matches LISTEN_PID
 	CheckPID bool
+	// Unsets the LISTEN* environment variables, so they don't get passed to any child processes
 	UnsetEnv bool
 }
 
+// DefaultSysdConfig has the default values for SysdConfig
 var DefaultSysdConfig = SysdConfig{
 	CheckPID: true,
 	UnsetEnv: false,
 }
 
+// NewSysDConfigWithFDIdx creates SysdConfig with defaults and fdIdx
 func NewSysDConfigWithFDIdx(fdIdx int) SysdConfig {
 	sysc := DefaultSysdConfig
 	sysc.FDIndex = &fdIdx
 	return sysc
 }
 
+// NewSysDConfigWithFDName creates SysdConfig with defaults and fdName
 func NewSysDConfigWithFDName(fdName string) SysdConfig {
 	sysc := DefaultSysdConfig
 	sysc.FDName = &fdName
 	return sysc
 }
 
+// GetListener returns the unix socket listener
 func (u *UnixSocketConfig) GetListener() (net.Listener, error) {
 
 	if u.RemoveExisting {
@@ -74,6 +92,7 @@ func (u *UnixSocketConfig) GetListener() (net.Listener, error) {
 	return l, nil
 }
 
+// StartFD is the starting file descriptor number
 const StartFD = 3
 
 func makeFdListener(fd int, name string) (net.Listener, error) {
@@ -86,6 +105,7 @@ func makeFdListener(fd int, name string) (net.Listener, error) {
 	return l, nil
 }
 
+// GetListener returns the FileListener created with socketed activated fd
 func (s *SysdConfig) GetListener() (net.Listener, error) {
 
 	if s.UnsetEnv {
@@ -117,9 +137,8 @@ func (s *SysdConfig) GetListener() (net.Listener, error) {
 		fd := StartFD + idx
 		if idx < len(fdNames) {
 			return makeFdListener(fd, fdNames[idx])
-		} else {
-			return makeFdListener(fd, fmt.Sprintf("sysdfd_%d", fd))
 		}
+		return makeFdListener(fd, fmt.Sprintf("sysdfd_%d", fd))
 	}
 
 	if s.FDName != nil {
@@ -159,6 +178,8 @@ func GetListener(addr string) (net.Listener, error) {
 	return nil, nil
 }
 
+// ListenAndServe is the drop-in replacement for `http.ListenAndServe`.
+// Supports unix and systemd sockets in addition
 func ListenAndServe(addr string, h http.Handler) error {
 
 	listener, err := GetListener(addr)
@@ -181,6 +202,7 @@ func ListenAndServe(addr string, h http.Handler) error {
 	return http.ListenAndServe(addr, h)
 }
 
+// UnsetSystemdListenVars unsets the LISTEN* environment variables so they are not passed to any child processes
 func UnsetSystemdListenVars() {
 	os.Unsetenv("LISTEN_PID")
 	os.Unsetenv("LISTEN_FDS")

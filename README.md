@@ -9,9 +9,9 @@ Just replace `http.ListenAndServe` with `anyhttp.ListenAndServe`.
 + anyhttp.ListenAndServe(addr, h)
 ```
 
-### Address Syntax
+## Address Syntax
 
-#### Unix socket
+### Unix socket
 
 Syntax
 
@@ -22,7 +22,7 @@ Examples
     unix/relative/path.sock
     unix//var/run/app/absolutepath.sock
 
-#### Systemd Socket activated fd:
+### Systemd Socket activated fd:
 
 Syntax
 
@@ -40,7 +40,7 @@ Examples:
     # Using default name
     sysd/fdname/myapp.socket
 
-#### TCP port
+### TCP port
 
 If the address is a number less than 65536, it is assumed as a port and passed as `http.ListenAndServe(":<port>",...)`
 
