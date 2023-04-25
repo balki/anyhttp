@@ -2,6 +2,8 @@ Create http server listening on unix sockets or systemd socket activated fds
 
 ## Quick Usage
 
+    go get go.balki.me/anyhttp
+
 Just replace `http.ListenAndServe` with `anyhttp.ListenAndServe`.
 
 ```diff
@@ -49,3 +51,12 @@ Anything else is directly passed to `http.ListenAndServe` as well. Below example
     :http
     :8888
     127.0.0.1:8080
+
+## Documentation
+
+https://pkg.go.dev/go.balki.me/anyhttp
+
+### Related links
+
+  * https://gist.github.com/teknoraver/5ffacb8757330715bcbcc90e6d46ac74#file-unixhttpd-go
+  * https://github.com/coreos/go-systemd/tree/main/activation
