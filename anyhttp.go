@@ -115,16 +115,16 @@ func (s *SysdConfig) GetListener() (net.Listener, error) {
 	if s.CheckPID {
 		pid, err := strconv.Atoi(os.Getenv("LISTEN_PID"))
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("invalid LISTEN_PID, err: %w", err)
 		}
 		if pid != os.Getpid() {
-			return nil, fmt.Errorf("fd not for you")
+			return nil, fmt.Errorf("unexpected PID, current:%v, LISTEN_PID: %v", os.Getpid(), pid)
 		}
 	}
 
 	numFds, err := strconv.Atoi(os.Getenv("LISTEN_FDS"))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("invalid LISTEN_FDS, err: %w", err)
 	}
 
 	fdNames := strings.Split(os.Getenv("LISTEN_FDNAMES"), ":")
@@ -132,7 +132,7 @@ func (s *SysdConfig) GetListener() (net.Listener, error) {
 	if s.FDIndex != nil {
 		idx := *s.FDIndex
 		if idx < 0 || idx >= numFds {
-			return nil, fmt.Errorf("invalid fd")
+			return nil, fmt.Errorf("invalid fd index, expected between 0 and %v, got: %v", numFds, idx)
 		}
 		fd := StartFD + idx
 		if idx < len(fdNames) {
@@ -148,10 +148,17 @@ func (s *SysdConfig) GetListener() (net.Listener, error) {
 				return makeFdListener(fd, name)
 			}
 		}
-		return nil, fmt.Errorf("fdName not found: %q", *s.FDName)
+		return nil, fmt.Errorf("fdName not found: %q, LISTEN_FDNAMES:%q", *s.FDName, os.Getenv("LISTEN_FDNAMES"))
 	}
 
-	return nil, fmt.Errorf("neither FDIndex nor FDName set")
+	return nil, errors.New("neither FDIndex nor FDName set")
+}
+
+// UnknownAddress Error is returned when address does not match any known syntax
+type UnknownAddress string
+
+func (u UnknownAddress) Error() string {
+	return fmt.Sprintf("unknown address: %q", string(u))
 }
 
 // GetListener gets a unix or systemd socket listener
@@ -164,7 +171,7 @@ func GetListener(addr string) (net.Listener, error) {
 	if strings.HasPrefix(addr, "sysd/fdidx/") {
 		idx, err := strconv.Atoi(strings.TrimPrefix(addr, "sysd/fdidx/"))
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("invalid fdidx, addr:%q err: %w", addr, err)
 		}
 		sysdc := NewSysDConfigWithFDIdx(idx)
 		return sysdc.GetListener()
@@ -175,7 +182,7 @@ func GetListener(addr string) (net.Listener, error) {
 		return sysdc.GetListener()
 	}
 
-	return nil, nil
+	return nil, UnknownAddress(addr)
 }
 
 // ListenAndServe is the drop-in replacement for `http.ListenAndServe`.
@@ -183,7 +190,7 @@ func GetListener(addr string) (net.Listener, error) {
 func ListenAndServe(addr string, h http.Handler) error {
 
 	listener, err := GetListener(addr)
-	if err != nil {
+	if _, ok := err.(UnknownAddress); err != nil && !ok {
 		return err
 	}
 
