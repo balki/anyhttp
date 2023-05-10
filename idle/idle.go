@@ -37,17 +37,16 @@ func CreateIdler(timeout time.Duration) Idler {
 		for {
 			if i.active.Load() != 0 {
 				time.Sleep(timeout)
-			} else {
-				t := *i.lastTick.Load()
-				now := time.Now()
-				dur := t.Add(timeout).Sub(now)
-				if dur == dur.Abs() {
-					time.Sleep(dur)
-				} else {
-					break
-				}
+				continue
 			}
-
+			t := *i.lastTick.Load()
+			now := time.Now()
+			dur := t.Add(timeout).Sub(now)
+			if dur == dur.Abs() {
+				time.Sleep(dur)
+				continue
+			}
+			break
 		}
 		close(i.c)
 	}()
