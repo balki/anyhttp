@@ -2,9 +2,31 @@
 package idle
 
 import (
+	"fmt"
 	"sync/atomic"
 	"time"
 )
+
+var (
+	gIdler atomic.Pointer[idler]
+)
+
+func Wait(timeout time.Duration) error {
+	i := CreateIdler(timeout).(*idler)
+	ok := gIdler.CompareAndSwap(nil, i)
+	if !ok {
+		return fmt.Errorf("idler already waiting")
+	}
+	i.Wait()
+	return nil
+}
+
+func Tick() {
+	i := gIdler.Load()
+	if i != nil {
+		i.Tick()
+	}
+}
 
 type Idler interface {
 	Enter()
