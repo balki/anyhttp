@@ -1,4 +1,4 @@
-Create http server listening on unix sockets or systemd socket activated fds
+Create http server listening on unix sockets and systemd socket activated fds
 
 ## Quick Usage
 
@@ -44,13 +44,28 @@ Examples:
 
 ### TCP port
 
-If the address is a number less than 65536, it is assumed as a port and passed as `http.ListenAndServe(":<port>",...)`
-
-Anything else is directly passed to `http.ListenAndServe` as well. Below examples should work
+If the address is a number less than 65536, it is assumed as a port and passed
+as `http.ListenAndServe(":<port>",...)` Anything else is directly passed to
+`http.ListenAndServe` as well. Below examples should work
 
     :http
     :8888
     127.0.0.1:8080
+
+## Idle server auto shutdown
+
+When using systemd socket activation, idle servers can be shut down to save on
+resources.  They will be restarted with socket activation when new request
+arrives. Quick example for the case. (Error checking skipped for brevity)
+
+```go
+addrType, httpServer, done, _ := anyhttp.Serve(addr, idle.WrapHandler(nil))
+if addrType == anyhttp.SystemdFD {
+    idle.Wait(30 * time.Minute)
+    httpServer.Shutdown(context.TODO())
+}
+<-done
+```
 
 ## Documentation
 
