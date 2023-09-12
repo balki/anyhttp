@@ -14,6 +14,20 @@ import (
 	"syscall"
 )
 
+// AddressType of the address passed
+type AddressType string
+
+var (
+	// UnixSocket - address is a unix socket, e.g. unix//run/foo.sock
+	UnixSocket AddressType = "UnixSocket"
+	// SystemdFD - address is a systemd fd, e.g. sysd/fdname/myapp.socket
+	SystemdFD AddressType = "SystemdFD"
+	// TCP - address is a TCP address, e.g. :1234
+	TCP AddressType = "TCP"
+	// Unknown - address is not recognized
+	Unknown AddressType = "Unknown"
+)
+
 // UnixSocketConfig has the configuration for Unix socket
 type UnixSocketConfig struct {
 
@@ -182,59 +196,69 @@ func (s *SysdConfig) GetListener() (net.Listener, error) {
 	return nil, errors.New("neither FDIndex nor FDName set")
 }
 
-// UnknownAddress Error is returned when address does not match any known syntax
-type UnknownAddress struct{}
-
-func (u UnknownAddress) Error() string {
-	return "unknown address"
-}
-
 // GetListener gets a unix or systemd socket listener
-func GetListener(addr string) (net.Listener, error) {
+func GetListener(addr string) (AddressType, net.Listener, error) {
 	if strings.HasPrefix(addr, "unix/") {
 		usc := NewUnixSocketConfig(strings.TrimPrefix(addr, "unix/"))
-		return usc.GetListener()
+		l, err := usc.GetListener()
+		return UnixSocket, l, err
 	}
 
 	if strings.HasPrefix(addr, "sysd/fdidx/") {
 		idx, err := strconv.Atoi(strings.TrimPrefix(addr, "sysd/fdidx/"))
 		if err != nil {
-			return nil, fmt.Errorf("invalid fdidx, addr:%q err: %w", addr, err)
+			return Unknown, nil, fmt.Errorf("invalid fdidx, addr:%q err: %w", addr, err)
 		}
 		sysdc := NewSysDConfigWithFDIdx(idx)
-		return sysdc.GetListener()
+		l, err := sysdc.GetListener()
+		return SystemdFD, l, err
 	}
 
 	if strings.HasPrefix(addr, "sysd/fdname/") {
 		sysdc := NewSysDConfigWithFDName(strings.TrimPrefix(addr, "sysd/fdname/"))
-		return sysdc.GetListener()
+		l, err := sysdc.GetListener()
+		return SystemdFD, l, err
 	}
 
-	return nil, UnknownAddress{}
+	if port, err := strconv.Atoi(addr); err == nil {
+		if port > 0 && port < 65536 {
+			addr = fmt.Sprintf(":%v", port)
+		} else {
+			return Unknown, nil, fmt.Errorf("invalid port: %v", port)
+		}
+	}
+
+	if addr == "" {
+		addr = ":http"
+	}
+
+	l, err := net.Listen("tcp", addr)
+	return TCP, l, err
+}
+
+// Serve creates and serve a http server.
+func Serve(addr string, h http.Handler) (AddressType, *http.Server, <-chan error, error) {
+	addrType, listener, err := GetListener(addr)
+	if err != nil {
+		return addrType, nil, nil, err
+	}
+	srv := &http.Server{Handler: h}
+	done := make(chan error)
+	go func() {
+		done <- srv.Serve(listener)
+		close(done)
+	}()
+	return addrType, srv, done, nil
 }
 
 // ListenAndServe is the drop-in replacement for `http.ListenAndServe`.
 // Supports unix and systemd sockets in addition
 func ListenAndServe(addr string, h http.Handler) error {
-
-	listener, err := GetListener(addr)
-	if _, isUnknown := err.(UnknownAddress); err != nil && !isUnknown {
+	_, _, done, err := Serve(addr, h)
+	if err != nil {
 		return err
 	}
-
-	if listener != nil {
-		return http.Serve(listener, h)
-	}
-
-	if port, err := strconv.Atoi(addr); err == nil {
-		if port > 0 && port < 65536 {
-
-			return http.ListenAndServe(fmt.Sprintf(":%v", port), h)
-		}
-		return fmt.Errorf("invalid port: %v", port)
-	}
-
-	return http.ListenAndServe(addr, h)
+	return <-done
 }
 
 // UnsetSystemdListenVars unsets the LISTEN* environment variables so they are not passed to any child processes
