@@ -14,13 +14,18 @@ import (
 	"syscall"
 )
 
+// AddressType of the address passed
 type AddressType string
 
 var (
+	// UnixSocket - address is a unix socket, e.g. unix//run/foo.sock
 	UnixSocket AddressType = "UnixSocket"
-	SystemdFD  AddressType = "SystemdFD"
-	TCP        AddressType = "TCP"
-	Unknown    AddressType = "Unknown"
+	// SystemdFD - address is a systemd fd, e.g. sysd/fdname/myapp.socket
+	SystemdFD AddressType = "SystemdFD"
+	// TCP - address is a TCP address, e.g. :1234
+	TCP AddressType = "TCP"
+	// Unknown - address is not recognized
+	Unknown AddressType = "Unknown"
 )
 
 // UnixSocketConfig has the configuration for Unix socket
@@ -231,21 +236,29 @@ func GetListener(addr string) (AddressType, net.Listener, error) {
 	return TCP, l, err
 }
 
-func ListenAndServeHTTP(addr string, h http.Handler) (AddressType, *http.Server, error) {
+// Serve creates and serve a http server.
+func Serve(addr string, h http.Handler) (AddressType, *http.Server, <-chan error, error) {
 	addrType, listener, err := GetListener(addr)
 	if err != nil {
-		return addrType, nil, err
+		return addrType, nil, nil, err
 	}
 	srv := &http.Server{Handler: h}
-	err = srv.Serve(listener)
-	return addrType, srv, err
+	done := make(chan error)
+	go func() {
+		done <- srv.Serve(listener)
+		close(done)
+	}()
+	return addrType, srv, done, nil
 }
 
 // ListenAndServe is the drop-in replacement for `http.ListenAndServe`.
 // Supports unix and systemd sockets in addition
 func ListenAndServe(addr string, h http.Handler) error {
-	_, _, err := ListenAndServeHTTP(addr, h)
-	return err
+	_, _, done, err := Serve(addr, h)
+	if err != nil {
+		return err
+	}
+	return <-done
 }
 
 // UnsetSystemdListenVars unsets the LISTEN* environment variables so they are not passed to any child processes
