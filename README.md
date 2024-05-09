@@ -32,7 +32,7 @@ Syntax
     sysd/fdname/<fd name set using FileDescriptorName socket setting >
 
 Examples:
-    
+
     # First (or only) socket fd passed to app
     sysd/fdidx/0
 
