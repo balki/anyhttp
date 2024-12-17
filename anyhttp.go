@@ -233,7 +233,6 @@ func Serve(addr string, h http.Handler) (addrType AddressType, srv *http.Server,
 		waitErrChan := make(chan error)
 		go func() {
 			waitErrChan <- srv.Serve(listener)
-			close(waitErrChan)
 		}()
 		go func() {
 			select {
