@@ -7,11 +7,13 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 )
 
 // AddressType of the address passed
@@ -97,6 +99,8 @@ type SysdConfig struct {
 	CheckPID bool
 	// Unsets the LISTEN* environment variables, so they don't get passed to any child processes
 	UnsetEnv bool
+	// Shutdown http server if no requests received for below timeout
+	IdleTimeout *time.Duration
 }
 
 // DefaultSysdConfig has the default values for SysdConfig
@@ -266,4 +270,122 @@ func UnsetSystemdListenVars() {
 	_ = os.Unsetenv("LISTEN_PID")
 	_ = os.Unsetenv("LISTEN_FDS")
 	_ = os.Unsetenv("LISTEN_FDNAMES")
+}
+
+func ParseAddress(addr string) (addrType AddressType, usc *UnixSocketConfig, sysc *SysdConfig, err error) {
+	// addrType = Unknown
+	usc = nil
+	sysc = nil
+	err = nil
+	u, err := url.Parse(addr)
+	if err != nil {
+		return TCP, nil, nil, nil
+	}
+	if u.Path == "unix" {
+		duc := DefaultUnixSocketConfig
+		usc = &duc
+		addrType = UnixSocket
+		for key, val := range u.Query() {
+			if key == "path" {
+				if len(val) != 1 {
+					err = fmt.Errorf("unix socket address error. Multiple path found: %v", val)
+					return
+				}
+				usc.SocketPath = val[0]
+			} else if key == "mode" {
+				if len(val) != 1 {
+					err = fmt.Errorf("unix socket address error. Multiple mode found: %v", val)
+					return
+				}
+				if _, serr := fmt.Sscanf(val[0], "%o", &usc.SocketMode); serr != nil {
+					err = fmt.Errorf("unix socket address error. Bad mode: %v, err: %w", val, serr)
+					return
+				}
+			} else if key == "remove_existing" {
+				if len(val) != 1 {
+					err = fmt.Errorf("unix socket address error. Multiple remove_existing found: %v", val)
+					return
+				}
+				if removeExisting, berr := strconv.ParseBool(val[0]); berr != nil {
+					err = fmt.Errorf("unix socket address error. Bad remove_existing: %v, err: %w", val, berr)
+					return
+				} else {
+					usc.RemoveExisting = removeExisting
+				}
+			} else {
+				err = fmt.Errorf("unix socket address error. Bad option; key: %v, val: %v", key, val)
+				return
+			}
+		}
+		if usc.SocketPath == "" {
+			err = fmt.Errorf("unix socket address error. Missing path; addr: %v", addr)
+			return
+		}
+	} else if u.Path == "sysd" {
+		dsc := DefaultSysdConfig
+		sysc = &dsc
+		addrType = SystemdFD
+		for key, val := range u.Query() {
+			if key == "name" {
+				if len(val) != 1 {
+					err = fmt.Errorf("systemd socket fd address error. Multiple name found: %v", val)
+					return
+				}
+				sysc.FDName = &val[0]
+			} else if key == "idx" {
+				if len(val) != 1 {
+					err = fmt.Errorf("systemd socket fd address error. Multiple idx found: %v", val)
+					return
+				}
+				if idx, ierr := strconv.Atoi(val[0]); ierr != nil {
+					err = fmt.Errorf("systemd socket fd address error. Bad idx: %v, err: %w", val, ierr)
+					return
+				} else {
+					sysc.FDIndex = &idx
+				}
+			} else if key == "check_pid" {
+				if len(val) != 1 {
+					err = fmt.Errorf("systemd socket fd address error. Multiple check_pid found: %v", val)
+					return
+				}
+				if checkPID, berr := strconv.ParseBool(val[0]); berr != nil {
+					err = fmt.Errorf("systemd socket fd address error. Bad check_pid: %v, err: %w", val, berr)
+					return
+				} else {
+					sysc.CheckPID = checkPID
+				}
+			} else if key == "unset_env" {
+				if len(val) != 1 {
+					err = fmt.Errorf("systemd socket fd address error. Multiple unset_env found: %v", val)
+					return
+				}
+				if unsetEnv, berr := strconv.ParseBool(val[0]); berr != nil {
+					err = fmt.Errorf("systemd socket fd address error. Bad unset_env: %v, err: %w", val, berr)
+					return
+				} else {
+					sysc.UnsetEnv = unsetEnv
+				}
+			} else if key == "idle_timeout" {
+				if len(val) != 1 {
+					err = fmt.Errorf("systemd socket fd address error. Multiple idle_timeout found: %v", val)
+					return
+				}
+				if timeout, terr := time.ParseDuration(val[0]); terr != nil {
+					err = fmt.Errorf("systemd socket fd address error. Bad idle_timeout: %v, err: %w", val, terr)
+					return
+				} else {
+					sysc.IdleTimeout = &timeout
+				}
+			} else {
+				err = fmt.Errorf("systemd socket fd address error. Bad option; key: %v, val: %v", key, val)
+				return
+			}
+		}
+		if (sysc.FDIndex == nil) == (sysc.FDName == nil) {
+			err = fmt.Errorf("systemd socket fd address error. Exactly only one of name and idx has to be set. name: %v, idx: %v", sysc.FDName, sysc.FDIndex)
+			return
+		}
+	}
+	// Just assume as TCP address
+	return TCP, nil, nil, nil
 }
