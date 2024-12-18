@@ -205,7 +205,7 @@ func (s *SysdConfig) GetListener() (net.Listener, error) {
 
 // Serve creates and serve a http server.
 func Serve(addr string, h http.Handler) (addrType AddressType, srv *http.Server, idler idle.Idler, done <-chan error, err error) {
-	addrType, usc, sysc, err := ParseAddress(addr)
+	addrType, usc, sysc, err := parseAddress(addr)
 	if err != nil {
 		return
 	}
@@ -215,12 +215,11 @@ func Serve(addr string, h http.Handler) (addrType AddressType, srv *http.Server,
 			return usc.GetListener()
 		} else if sysc != nil {
 			return sysc.GetListener()
-		} else {
-			if addr == "" {
-				addr = ":http"
-			}
-			return net.Listen("tcp", addr)
 		}
+		if addr == "" {
+			addr = ":http"
+		}
+		return net.Listen("tcp", addr)
 	}()
 	if err != nil {
 		return
@@ -268,8 +267,7 @@ func UnsetSystemdListenVars() {
 	_ = os.Unsetenv("LISTEN_FDNAMES")
 }
 
-func ParseAddress(addr string) (addrType AddressType, usc *UnixSocketConfig, sysc *SysdConfig, err error) {
-	// addrType = Unknown
+func parseAddress(addr string) (addrType AddressType, usc *UnixSocketConfig, sysc *SysdConfig, err error) {
 	usc = nil
 	sysc = nil
 	err = nil
@@ -302,11 +300,11 @@ func ParseAddress(addr string) (addrType AddressType, usc *UnixSocketConfig, sys
 					err = fmt.Errorf("unix socket address error. Multiple remove_existing found: %v", val)
 					return
 				}
-				if removeExisting, berr := strconv.ParseBool(val[0]); berr != nil {
+				if removeExisting, berr := strconv.ParseBool(val[0]); berr == nil {
+					usc.RemoveExisting = removeExisting
+				} else {
 					err = fmt.Errorf("unix socket address error. Bad remove_existing: %v, err: %w", val, berr)
 					return
-				} else {
-					usc.RemoveExisting = removeExisting
 				}
 			} else {
 				err = fmt.Errorf("unix socket address error. Bad option; key: %v, val: %v", key, val)
@@ -333,44 +331,44 @@ func ParseAddress(addr string) (addrType AddressType, usc *UnixSocketConfig, sys
 					err = fmt.Errorf("systemd socket fd address error. Multiple idx found: %v", val)
 					return
 				}
-				if idx, ierr := strconv.Atoi(val[0]); ierr != nil {
+				if idx, ierr := strconv.Atoi(val[0]); ierr == nil {
+					sysc.FDIndex = &idx
+				} else {
 					err = fmt.Errorf("systemd socket fd address error. Bad idx: %v, err: %w", val, ierr)
 					return
-				} else {
-					sysc.FDIndex = &idx
 				}
 			} else if key == "check_pid" {
 				if len(val) != 1 {
 					err = fmt.Errorf("systemd socket fd address error. Multiple check_pid found: %v", val)
 					return
 				}
-				if checkPID, berr := strconv.ParseBool(val[0]); berr != nil {
+				if checkPID, berr := strconv.ParseBool(val[0]); berr == nil {
+					sysc.CheckPID = checkPID
+				} else {
 					err = fmt.Errorf("systemd socket fd address error. Bad check_pid: %v, err: %w", val, berr)
 					return
-				} else {
-					sysc.CheckPID = checkPID
 				}
 			} else if key == "unset_env" {
 				if len(val) != 1 {
 					err = fmt.Errorf("systemd socket fd address error. Multiple unset_env found: %v", val)
 					return
 				}
-				if unsetEnv, berr := strconv.ParseBool(val[0]); berr != nil {
+				if unsetEnv, berr := strconv.ParseBool(val[0]); berr == nil {
+					sysc.UnsetEnv = unsetEnv
+				} else {
 					err = fmt.Errorf("systemd socket fd address error. Bad unset_env: %v, err: %w", val, berr)
 					return
-				} else {
-					sysc.UnsetEnv = unsetEnv
 				}
 			} else if key == "idle_timeout" {
 				if len(val) != 1 {
 					err = fmt.Errorf("systemd socket fd address error. Multiple idle_timeout found: %v", val)
 					return
 				}
-				if timeout, terr := time.ParseDuration(val[0]); terr != nil {
+				if timeout, terr := time.ParseDuration(val[0]); terr == nil {
+					sysc.IdleTimeout = &timeout
+				} else {
 					err = fmt.Errorf("systemd socket fd address error. Bad idle_timeout: %v, err: %w", val, terr)
 					return
-				} else {
-					sysc.IdleTimeout = &timeout
 				}
 			} else {
 				err = fmt.Errorf("systemd socket fd address error. Bad option; key: %v, val: %v", key, val)
