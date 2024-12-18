@@ -381,7 +381,9 @@ func ParseAddress(addr string) (addrType AddressType, usc *UnixSocketConfig, sys
 			err = fmt.Errorf("systemd socket fd address error. Exactly only one of name and idx has to be set. name: %v, idx: %v", sysc.FDName, sysc.FDIndex)
 			return
 		}
+	} else {
+		// Just assume as TCP address
+		return TCP, nil, nil, nil
 	}
-	// Just assume as TCP address
-	return TCP, nil, nil, nil
+	return
 }
