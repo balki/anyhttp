@@ -280,26 +280,18 @@ func parseAddress(addr string) (addrType AddressType, usc *UnixSocketConfig, sys
 		usc = &duc
 		addrType = UnixSocket
 		for key, val := range u.Query() {
+			if len(val) != 1 {
+				err = fmt.Errorf("unix socket address error. Multiple %v found: %v", key, val)
+				return
+			}
 			if key == "path" {
-				if len(val) != 1 {
-					err = fmt.Errorf("unix socket address error. Multiple path found: %v", val)
-					return
-				}
 				usc.SocketPath = val[0]
 			} else if key == "mode" {
-				if len(val) != 1 {
-					err = fmt.Errorf("unix socket address error. Multiple mode found: %v", val)
-					return
-				}
 				if _, serr := fmt.Sscanf(val[0], "%o", &usc.SocketMode); serr != nil {
 					err = fmt.Errorf("unix socket address error. Bad mode: %v, err: %w", val, serr)
 					return
 				}
 			} else if key == "remove_existing" {
-				if len(val) != 1 {
-					err = fmt.Errorf("unix socket address error. Multiple remove_existing found: %v", val)
-					return
-				}
 				if removeExisting, berr := strconv.ParseBool(val[0]); berr == nil {
 					usc.RemoveExisting = removeExisting
 				} else {
@@ -320,17 +312,13 @@ func parseAddress(addr string) (addrType AddressType, usc *UnixSocketConfig, sys
 		sysc = &dsc
 		addrType = SystemdFD
 		for key, val := range u.Query() {
+			if len(val) != 1 {
+				err = fmt.Errorf("systemd socket fd address error. Multiple %v found: %v", key, val)
+				return
+			}
 			if key == "name" {
-				if len(val) != 1 {
-					err = fmt.Errorf("systemd socket fd address error. Multiple name found: %v", val)
-					return
-				}
 				sysc.FDName = &val[0]
 			} else if key == "idx" {
-				if len(val) != 1 {
-					err = fmt.Errorf("systemd socket fd address error. Multiple idx found: %v", val)
-					return
-				}
 				if idx, ierr := strconv.Atoi(val[0]); ierr == nil {
 					sysc.FDIndex = &idx
 				} else {
@@ -338,10 +326,6 @@ func parseAddress(addr string) (addrType AddressType, usc *UnixSocketConfig, sys
 					return
 				}
 			} else if key == "check_pid" {
-				if len(val) != 1 {
-					err = fmt.Errorf("systemd socket fd address error. Multiple check_pid found: %v", val)
-					return
-				}
 				if checkPID, berr := strconv.ParseBool(val[0]); berr == nil {
 					sysc.CheckPID = checkPID
 				} else {
@@ -349,10 +333,6 @@ func parseAddress(addr string) (addrType AddressType, usc *UnixSocketConfig, sys
 					return
 				}
 			} else if key == "unset_env" {
-				if len(val) != 1 {
-					err = fmt.Errorf("systemd socket fd address error. Multiple unset_env found: %v", val)
-					return
-				}
 				if unsetEnv, berr := strconv.ParseBool(val[0]); berr == nil {
 					sysc.UnsetEnv = unsetEnv
 				} else {
@@ -360,10 +340,6 @@ func parseAddress(addr string) (addrType AddressType, usc *UnixSocketConfig, sys
 					return
 				}
 			} else if key == "idle_timeout" {
-				if len(val) != 1 {
-					err = fmt.Errorf("systemd socket fd address error. Multiple idle_timeout found: %v", val)
-					return
-				}
 				if timeout, terr := time.ParseDuration(val[0]); terr == nil {
 					sysc.IdleTimeout = &timeout
 				} else {
