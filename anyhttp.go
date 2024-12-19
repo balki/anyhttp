@@ -2,16 +2,21 @@
 package anyhttp
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
+
+	"go.balki.me/anyhttp/idle"
 )
 
 // AddressType of the address passed
@@ -97,6 +102,8 @@ type SysdConfig struct {
 	CheckPID bool
 	// Unsets the LISTEN* environment variables, so they don't get passed to any child processes
 	UnsetEnv bool
+	// Shutdown http server if no requests received for below timeout
+	IdleTimeout *time.Duration
 }
 
 // DefaultSysdConfig has the default values for SysdConfig
@@ -196,65 +203,57 @@ func (s *SysdConfig) GetListener() (net.Listener, error) {
 	return nil, errors.New("neither FDIndex nor FDName set")
 }
 
-// GetListener gets a unix or systemd socket listener
-func GetListener(addr string) (AddressType, net.Listener, error) {
-	if strings.HasPrefix(addr, "unix/") {
-		usc := NewUnixSocketConfig(strings.TrimPrefix(addr, "unix/"))
-		l, err := usc.GetListener()
-		return UnixSocket, l, err
-	}
-
-	if strings.HasPrefix(addr, "sysd/fdidx/") {
-		idx, err := strconv.Atoi(strings.TrimPrefix(addr, "sysd/fdidx/"))
-		if err != nil {
-			return Unknown, nil, fmt.Errorf("invalid fdidx, addr:%q err: %w", addr, err)
-		}
-		sysdc := NewSysDConfigWithFDIdx(idx)
-		l, err := sysdc.GetListener()
-		return SystemdFD, l, err
-	}
-
-	if strings.HasPrefix(addr, "sysd/fdname/") {
-		sysdc := NewSysDConfigWithFDName(strings.TrimPrefix(addr, "sysd/fdname/"))
-		l, err := sysdc.GetListener()
-		return SystemdFD, l, err
-	}
-
-	if port, err := strconv.Atoi(addr); err == nil {
-		if port > 0 && port < 65536 {
-			addr = fmt.Sprintf(":%v", port)
-		} else {
-			return Unknown, nil, fmt.Errorf("invalid port: %v", port)
-		}
-	}
-
-	if addr == "" {
-		addr = ":http"
-	}
-
-	l, err := net.Listen("tcp", addr)
-	return TCP, l, err
-}
-
 // Serve creates and serve a http server.
-func Serve(addr string, h http.Handler) (AddressType, *http.Server, <-chan error, error) {
-	addrType, listener, err := GetListener(addr)
+func Serve(addr string, h http.Handler) (addrType AddressType, srv *http.Server, idler idle.Idler, done <-chan error, err error) {
+	addrType, usc, sysc, err := parseAddress(addr)
 	if err != nil {
-		return addrType, nil, nil, err
+		return
 	}
-	srv := &http.Server{Handler: h}
-	done := make(chan error)
-	go func() {
-		done <- srv.Serve(listener)
-		close(done)
+
+	listener, err := func() (net.Listener, error) {
+		if usc != nil {
+			return usc.GetListener()
+		} else if sysc != nil {
+			return sysc.GetListener()
+		}
+		if addr == "" {
+			addr = ":http"
+		}
+		return net.Listen("tcp", addr)
 	}()
-	return addrType, srv, done, nil
+	if err != nil {
+		return
+	}
+	errChan := make(chan error)
+	done = errChan
+	if addrType == SystemdFD && sysc.IdleTimeout != nil {
+		idler = idle.CreateIdler(*sysc.IdleTimeout)
+		srv = &http.Server{Handler: idle.WrapIdlerHandler(idler, h)}
+		waitErrChan := make(chan error)
+		go func() {
+			waitErrChan <- srv.Serve(listener)
+		}()
+		go func() {
+			select {
+			case err := <-waitErrChan:
+				errChan <- err
+			case <-idler.Chan():
+				errChan <- srv.Shutdown(context.TODO())
+			}
+		}()
+	} else {
+		srv = &http.Server{Handler: h}
+		go func() {
+			errChan <- srv.Serve(listener)
+		}()
+	}
+	return
 }
 
 // ListenAndServe is the drop-in replacement for `http.ListenAndServe`.
 // Supports unix and systemd sockets in addition
 func ListenAndServe(addr string, h http.Handler) error {
-	_, _, done, err := Serve(addr, h)
+	_, _, _, done, err := Serve(addr, h)
 	if err != nil {
 		return err
 	}
@@ -266,4 +265,99 @@ func UnsetSystemdListenVars() {
 	_ = os.Unsetenv("LISTEN_PID")
 	_ = os.Unsetenv("LISTEN_FDS")
 	_ = os.Unsetenv("LISTEN_FDNAMES")
+}
+
+func parseAddress(addr string) (addrType AddressType, usc *UnixSocketConfig, sysc *SysdConfig, err error) {
+	usc = nil
+	sysc = nil
+	err = nil
+	u, err := url.Parse(addr)
+	if err != nil {
+		return TCP, nil, nil, nil
+	}
+	if u.Path == "unix" {
+		duc := DefaultUnixSocketConfig
+		usc = &duc
+		addrType = UnixSocket
+		for key, val := range u.Query() {
+			if len(val) != 1 {
+				err = fmt.Errorf("unix socket address error. Multiple %v found: %v", key, val)
+				return
+			}
+			if key == "path" {
+				usc.SocketPath = val[0]
+			} else if key == "mode" {
+				if _, serr := fmt.Sscanf(val[0], "%o", &usc.SocketMode); serr != nil {
+					err = fmt.Errorf("unix socket address error. Bad mode: %v, err: %w", val, serr)
+					return
+				}
+			} else if key == "remove_existing" {
+				if removeExisting, berr := strconv.ParseBool(val[0]); berr == nil {
+					usc.RemoveExisting = removeExisting
+				} else {
+					err = fmt.Errorf("unix socket address error. Bad remove_existing: %v, err: %w", val, berr)
+					return
+				}
+			} else {
+				err = fmt.Errorf("unix socket address error. Bad option; key: %v, val: %v", key, val)
+				return
+			}
+		}
+		if usc.SocketPath == "" {
+			err = fmt.Errorf("unix socket address error. Missing path; addr: %v", addr)
+			return
+		}
+	} else if u.Path == "sysd" {
+		dsc := DefaultSysdConfig
+		sysc = &dsc
+		addrType = SystemdFD
+		for key, val := range u.Query() {
+			if len(val) != 1 {
+				err = fmt.Errorf("systemd socket fd address error. Multiple %v found: %v", key, val)
+				return
+			}
+			if key == "name" {
+				sysc.FDName = &val[0]
+			} else if key == "idx" {
+				if idx, ierr := strconv.Atoi(val[0]); ierr == nil {
+					sysc.FDIndex = &idx
+				} else {
+					err = fmt.Errorf("systemd socket fd address error. Bad idx: %v, err: %w", val, ierr)
+					return
+				}
+			} else if key == "check_pid" {
+				if checkPID, berr := strconv.ParseBool(val[0]); berr == nil {
+					sysc.CheckPID = checkPID
+				} else {
+					err = fmt.Errorf("systemd socket fd address error. Bad check_pid: %v, err: %w", val, berr)
+					return
+				}
+			} else if key == "unset_env" {
+				if unsetEnv, berr := strconv.ParseBool(val[0]); berr == nil {
+					sysc.UnsetEnv = unsetEnv
+				} else {
+					err = fmt.Errorf("systemd socket fd address error. Bad unset_env: %v, err: %w", val, berr)
+					return
+				}
+			} else if key == "idle_timeout" {
+				if timeout, terr := time.ParseDuration(val[0]); terr == nil {
+					sysc.IdleTimeout = &timeout
+				} else {
+					err = fmt.Errorf("systemd socket fd address error. Bad idle_timeout: %v, err: %w", val, terr)
+					return
+				}
+			} else {
+				err = fmt.Errorf("systemd socket fd address error. Bad option; key: %v, val: %v", key, val)
+				return
+			}
+		}
+		if (sysc.FDIndex == nil) == (sysc.FDName == nil) {
+			err = fmt.Errorf("systemd socket fd address error. Exactly only one of name and idx has to be set. name: %v, idx: %v", sysc.FDName, sysc.FDIndex)
+			return
+		}
+	} else {
+		// Just assume as TCP address
+		return TCP, nil, nil, nil
+	}
+	return
 }
