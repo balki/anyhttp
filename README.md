@@ -17,13 +17,13 @@ Just replace `http.ListenAndServe` with `anyhttp.ListenAndServe`.
 
 Syntax
 
-    unix?path=<socket_path>&mode=<socket file mode>&remove_existing=<yes|no>
+    unix?path=<socket_path>&mode=<socket file mode>&remove_existing=<true|false>
 
 Examples
 
     unix?path=relative/path.sock
     unix?path=/var/run/app/absolutepath.sock
-    unix?path=/run/app.sock&mode=600&remove_existing=no
+    unix?path=/run/app.sock&mode=600&remove_existing=false
 
 | option          | description                                    | default  |
 |-----------------|------------------------------------------------|----------|
@@ -35,7 +35,7 @@ Examples
 
 Syntax
 
-    sysd?idx=<fd index>&name=<fd name>&check_pid=<yes|no>&unset_env=<yes|no>&idle_timeout=<duration>
+    sysd?idx=<fd index>&name=<fd name>&check_pid=<true|false>&unset_env=<true|false>&idle_timeout=<duration>
 
 Only one of `idx` or `name` has to be set
 

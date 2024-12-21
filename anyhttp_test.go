@@ -72,6 +72,20 @@ func Test_parseAddress(t *testing.T) {
 			wantSysc:     nil,
 			wantErr:      true,
 		},
+		{
+			name:         "systemd address with check_pid and unset_env",
+			addr:         "sysd?idx=0&check_pid=false&unset_env=f",
+			wantAddrType: SystemdFD,
+			wantUsc:      nil,
+			wantSysc: &SysdConfig{
+				FDIndex:     ptr(0),
+				FDName:      nil,
+				CheckPID:    false,
+				UnsetEnv:    false,
+				IdleTimeout: nil,
+			},
+			wantErr: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
