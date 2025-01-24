@@ -203,18 +203,46 @@ func (s *SysdConfig) GetListener() (net.Listener, error) {
 	return nil, errors.New("neither FDIndex nor FDName set")
 }
 
-// Serve creates and serve a http server.
-func Serve(addr string, h http.Handler) (addrType AddressType, srv *http.Server, idler idle.Idler, done <-chan error, err error) {
-	addrType, usc, sysc, err := parseAddress(addr)
+type ServerCtx struct {
+	AddressType      AddressType
+	Listener         net.Listener
+	Server           *http.Server
+	Idler            idle.Idler
+	Done             <-chan error
+	UnixSocketConfig *UnixSocketConfig
+	SysdConfig       *SysdConfig
+}
+
+func (s *ServerCtx) Wait() error {
+	return <-s.Done
+}
+
+func (s *ServerCtx) Addr() net.Addr {
+	return s.Listener.Addr()
+}
+
+func (s *ServerCtx) Shutdown(ctx context.Context) error {
+	err := s.Server.Shutdown(ctx)
 	if err != nil {
-		return
+		return err
+	}
+	return <-s.Done
+}
+
+// Serve creates and serve a http server.
+func Serve(addr string, h http.Handler) (*ServerCtx, error) {
+	var ctx ServerCtx
+	var err error
+	ctx.AddressType, ctx.UnixSocketConfig, ctx.SysdConfig, err = parseAddress(addr)
+	if err != nil {
+		return nil, err
 	}
 
-	listener, err := func() (net.Listener, error) {
-		if usc != nil {
-			return usc.GetListener()
-		} else if sysc != nil {
-			return sysc.GetListener()
+	ctx.Listener, err = func() (net.Listener, error) {
+		if ctx.UnixSocketConfig != nil {
+			return ctx.UnixSocketConfig.GetListener()
+		} else if ctx.SysdConfig != nil {
+			return ctx.SysdConfig.GetListener()
 		}
 		if addr == "" {
 			addr = ":http"
@@ -222,42 +250,42 @@ func Serve(addr string, h http.Handler) (addrType AddressType, srv *http.Server,
 		return net.Listen("tcp", addr)
 	}()
 	if err != nil {
-		return
+		return nil, err
 	}
 	errChan := make(chan error)
-	done = errChan
-	if addrType == SystemdFD && sysc.IdleTimeout != nil {
-		idler = idle.CreateIdler(*sysc.IdleTimeout)
-		srv = &http.Server{Handler: idle.WrapIdlerHandler(idler, h)}
+	ctx.Done = errChan
+	if ctx.AddressType == SystemdFD && ctx.SysdConfig.IdleTimeout != nil {
+		ctx.Idler = idle.CreateIdler(*ctx.SysdConfig.IdleTimeout)
+		ctx.Server = &http.Server{Handler: idle.WrapIdlerHandler(ctx.Idler, h)}
 		waitErrChan := make(chan error)
 		go func() {
-			waitErrChan <- srv.Serve(listener)
+			waitErrChan <- ctx.Server.Serve(ctx.Listener)
 		}()
 		go func() {
 			select {
 			case err := <-waitErrChan:
 				errChan <- err
-			case <-idler.Chan():
-				errChan <- srv.Shutdown(context.TODO())
+			case <-ctx.Idler.Chan():
+				errChan <- ctx.Server.Shutdown(context.TODO())
 			}
 		}()
 	} else {
-		srv = &http.Server{Handler: h}
+		ctx.Server = &http.Server{Handler: h}
 		go func() {
-			errChan <- srv.Serve(listener)
+			errChan <- ctx.Server.Serve(ctx.Listener)
 		}()
 	}
-	return
+	return &ctx, nil
 }
 
 // ListenAndServe is the drop-in replacement for `http.ListenAndServe`.
 // Supports unix and systemd sockets in addition
 func ListenAndServe(addr string, h http.Handler) error {
-	_, _, _, done, err := Serve(addr, h)
+	ctx, err := Serve(addr, h)
 	if err != nil {
 		return err
 	}
-	return <-done
+	return ctx.Wait()
 }
 
 // UnsetSystemdListenVars unsets the LISTEN* environment variables so they are not passed to any child processes
