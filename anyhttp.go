@@ -23,9 +23,9 @@ import (
 type AddressType string
 
 var (
-	// UnixSocket - address is a unix socket, e.g. unix//run/foo.sock
+	// UnixSocket - address is a unix socket, e.g. unix?path=/run/foo.sock
 	UnixSocket AddressType = "UnixSocket"
-	// SystemdFD - address is a systemd fd, e.g. sysd/fdname/myapp.socket
+	// SystemdFD - address is a systemd fd, e.g. sysd?name=myapp.socket
 	SystemdFD AddressType = "SystemdFD"
 	// TCP - address is a TCP address, e.g. :1234
 	TCP AddressType = "TCP"
@@ -203,6 +203,34 @@ func (s *SysdConfig) GetListener() (net.Listener, error) {
 	return nil, errors.New("neither FDIndex nor FDName set")
 }
 
+// GetListener is low level function for use with non-http servers. e.g. tcp, smtp
+// Caller should handle idle timeout if needed
+func GetListener(addr string) (net.Listener, AddressType, any /* cfg */, error) {
+
+	addrType, unixSocketConfig, sysdConfig, perr := parseAddress(addr)
+	if perr != nil {
+		return nil, Unknown, nil, perr
+	}
+	if unixSocketConfig != nil {
+		listener, err := unixSocketConfig.GetListener()
+		if err != nil {
+			return nil, Unknown, nil, err
+		}
+		return listener, addrType, unixSocketConfig, nil
+	} else if sysdConfig != nil {
+		listener, err := sysdConfig.GetListener()
+		if err != nil {
+			return nil, Unknown, nil, err
+		}
+		return listener, addrType, sysdConfig, nil
+	}
+	if addr == "" {
+		addr = ":http"
+	}
+	listener, err := net.Listen("tcp", addr)
+	return listener, TCP, nil, err
+}
+
 type ServerCtx struct {
 	AddressType      AddressType
 	Listener         net.Listener
@@ -229,59 +257,28 @@ func (s *ServerCtx) Shutdown(ctx context.Context) error {
 	return <-s.Done
 }
 
-// Serve creates and serve a http server.
-func Serve(addr string, h http.Handler) (*ServerCtx, error) {
-	var ctx ServerCtx
-	var err error
-	ctx.AddressType, ctx.UnixSocketConfig, ctx.SysdConfig, err = parseAddress(addr)
-	if err != nil {
-		return nil, err
-	}
+// ServeTLS creates and serves a HTTPS server.
+func ServeTLS(addr string, h http.Handler, certFile string, keyFile string) (*ServerCtx, error) {
+	return serve(addr, h, certFile, keyFile)
+}
 
-	ctx.Listener, err = func() (net.Listener, error) {
-		if ctx.UnixSocketConfig != nil {
-			return ctx.UnixSocketConfig.GetListener()
-		} else if ctx.SysdConfig != nil {
-			return ctx.SysdConfig.GetListener()
-		}
-		if addr == "" {
-			addr = ":http"
-		}
-		return net.Listen("tcp", addr)
-	}()
-	if err != nil {
-		return nil, err
-	}
-	errChan := make(chan error)
-	ctx.Done = errChan
-	if ctx.AddressType == SystemdFD && ctx.SysdConfig.IdleTimeout != nil {
-		ctx.Idler = idle.CreateIdler(*ctx.SysdConfig.IdleTimeout)
-		ctx.Server = &http.Server{Handler: idle.WrapIdlerHandler(ctx.Idler, h)}
-		waitErrChan := make(chan error)
-		go func() {
-			waitErrChan <- ctx.Server.Serve(ctx.Listener)
-		}()
-		go func() {
-			select {
-			case err := <-waitErrChan:
-				errChan <- err
-			case <-ctx.Idler.Chan():
-				errChan <- ctx.Server.Shutdown(context.TODO())
-			}
-		}()
-	} else {
-		ctx.Server = &http.Server{Handler: h}
-		go func() {
-			errChan <- ctx.Server.Serve(ctx.Listener)
-		}()
-	}
-	return &ctx, nil
+// Serve creates and serves a HTTP server.
+func Serve(addr string, h http.Handler) (*ServerCtx, error) {
+	return serve(addr, h, "", "")
 }
 
 // ListenAndServe is the drop-in replacement for `http.ListenAndServe`.
 // Supports unix and systemd sockets in addition
 func ListenAndServe(addr string, h http.Handler) error {
 	ctx, err := Serve(addr, h)
+	if err != nil {
+		return err
+	}
+	return ctx.Wait()
+}
+
+func ListenAndServeTLS(addr string, certFile string, keyFile string, h http.Handler) error {
+	ctx, err := ServeTLS(addr, h, certFile, keyFile)
 	if err != nil {
 		return err
 	}
@@ -388,4 +385,56 @@ func parseAddress(addr string) (addrType AddressType, usc *UnixSocketConfig, sys
 		return TCP, nil, nil, nil
 	}
 	return
+}
+
+func serve(addr string, h http.Handler, certFile string, keyFile string) (*ServerCtx, error) {
+
+	serveFn := func() func(ctx *ServerCtx) error {
+		if certFile != "" {
+			return func(ctx *ServerCtx) error {
+				return ctx.Server.ServeTLS(ctx.Listener, certFile, keyFile)
+			}
+		}
+		return func(ctx *ServerCtx) error {
+			return ctx.Server.Serve(ctx.Listener)
+		}
+	}()
+	var ctx ServerCtx
+	var err error
+	var cfg any
+
+	ctx.Listener, ctx.AddressType, cfg, err = GetListener(addr)
+	if err != nil {
+		return nil, err
+	}
+	switch ctx.AddressType {
+	case UnixSocket:
+		ctx.UnixSocketConfig = cfg.(*UnixSocketConfig)
+	case SystemdFD:
+		ctx.SysdConfig = cfg.(*SysdConfig)
+	}
+	errChan := make(chan error)
+	ctx.Done = errChan
+	if ctx.AddressType == SystemdFD && ctx.SysdConfig.IdleTimeout != nil {
+		ctx.Idler = idle.CreateIdler(*ctx.SysdConfig.IdleTimeout)
+		ctx.Server = &http.Server{Handler: idle.WrapIdlerHandler(ctx.Idler, h)}
+		waitErrChan := make(chan error)
+		go func() {
+			waitErrChan <- serveFn(&ctx)
+		}()
+		go func() {
+			select {
+			case err := <-waitErrChan:
+				errChan <- err
+			case <-ctx.Idler.Chan():
+				errChan <- ctx.Server.Shutdown(context.TODO())
+			}
+		}()
+	} else {
+		ctx.Server = &http.Server{Handler: h}
+		go func() {
+			errChan <- serveFn(&ctx)
+		}()
+	}
+	return &ctx, nil
 }

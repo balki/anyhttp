@@ -1,7 +1,9 @@
 package anyhttp
 
 import (
+	"context"
 	"encoding/json"
+	"log"
 	"testing"
 	"time"
 )
@@ -117,6 +119,12 @@ func Test_parseAddress(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestServe(t *testing.T) {
+	ctx, err := Serve("unix?path=/tmp/foo.sock", nil)
+	log.Printf("Got ctx: %v\n,  err: %v", ctx, err)
+	ctx.Shutdown(context.TODO())
 }
 
 // Helpers
