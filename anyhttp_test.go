@@ -3,7 +3,6 @@ package anyhttp
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"testing"
 	"time"
 )
@@ -123,7 +122,12 @@ func Test_parseAddress(t *testing.T) {
 
 func TestServe(t *testing.T) {
 	ctx, err := Serve("unix?path=/tmp/foo.sock", nil)
-	log.Printf("Got ctx: %v\n,  err: %v", ctx, err)
+	if err != nil {
+		t.Fatal()
+	}
+	if ctx.AddressType != UnixSocket {
+		t.Errorf("Serve() ServerCtx = %v, want %v", ctx.AddressType, UnixSocket)
+	}
 	ctx.Shutdown(context.TODO())
 }
 
