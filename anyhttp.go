@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"go.balki.me/anyhttp/idle"
@@ -149,16 +148,6 @@ func (u *UnixSocketConfig) GetListener() (net.Listener, error) {
 
 // StartFD is the starting file descriptor number
 const StartFD = 3
-
-func makeFdListener(fd int, name string) (net.Listener, error) {
-	fdFile := os.NewFile(uintptr(fd), name)
-	l, err := net.FileListener(fdFile)
-	if err != nil {
-		return nil, err
-	}
-	syscall.CloseOnExec(fd)
-	return l, nil
-}
 
 // GetListener returns the FileListener created with socketed activated fd
 func (s *SysdConfig) GetListener() (net.Listener, error) {
